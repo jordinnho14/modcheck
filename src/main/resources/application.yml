@@ -1,0 +1,42 @@
+# ModCheck — increment 1 config.
+# The Nexus API key comes from the NEXUS_API_KEY env var. Never commit it.
+
+spring:
+  application:
+    name: modcheck
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/modcheck
+    username: modcheck
+    password: modcheck
+
+  jpa:
+    hibernate:
+      ddl-auto: validate        # Flyway owns the schema; Hibernate only checks it matches
+    open-in-view: false
+
+  flyway:
+    enabled: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 6h          # mod metadata/file listings change slowly; 6h is a sane default
+
+nexus:
+  api-key: ${NEXUS_API_KEY}
+  rest-base-url: https://api.nexusmods.com/v1
+  graphql-url: https://api.nexusmods.com/v2/graphql
+  user-agent: ModCheck/0.1 (dev)
+
+server:
+  port: 8080
+
+logging:
+  level:
+    dev.modcheck: DEBUG
