@@ -40,3 +40,4 @@ server:
 logging:
   level:
     dev.modcheck: DEBUG
+    org.springframework.web.client.RestClient: DEBUG

@@ -1,4 +1,11 @@
 package dev.modcheck.modcheck.config;
 
-public class NexusProperties {
-}
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties(prefix = "nexus")
+public record NexusProperties(
+    String apiKey,
+    String restBaseUrl,
+    String graphqlUrl,
+    String userAgent
+) {}

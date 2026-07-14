@@ -1,4 +1,95 @@
 package dev.modcheck.modcheck.client;
 
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+@Component
 public class NexusClient {
+
+    private static final int FILE_PAGE_SIZE = 100;
+    private final RestClient nexusRestClient;
+    private final RestClient nexusGraphQLClient;
+
+    public NexusClient(RestClient nexusRestClient, RestClient nexusGraphQLClient) {
+        this.nexusRestClient = nexusRestClient;
+        this.nexusGraphQLClient = nexusGraphQLClient;
+    }
+
+    public ModMetadata getModMetadata(String gameDomain, int modId) {
+        return nexusRestClient.get()
+            .uri("/games/{game}/mods/{id}.json", gameDomain, modId)
+            .retrieve()
+            .body(ModMetadata.class);
+    }
+
+    public CollectionResponse.ModCollection getCollection(String slug) {
+        String query = """
+        query CollectionMods($slug: String!) {
+          collection(slug: $slug) {
+            name
+            slug
+            game { domainName }
+            latestPublishedRevision {
+              revisionNumber
+              modFiles {
+                optional
+                file { fileId name version mod { modId name version } }
+              }
+            }
+          }
+        }
+        """;
+        var response = nexusGraphQLClient.post()
+            .body(Map.of("query", query, "variables", Map.of("slug", slug)))
+            .retrieve()
+            .body(CollectionResponse.class);
+        return response.data().collection();
+    }
+
+    public List<ModFilesResponse.ArchiveFile> getModFiles(int gameId, int modId) {
+        String query = """
+        query ModFiles($modId: Int!, $gameId: Int!, $offset: Int!, $count: Int!) {
+          modFileContents(
+            filter: {
+              modId:  [{ value: $modId,  op: EQUALS }],
+              gameId: [{ value: $gameId, op: EQUALS }]
+            },
+            offset: $offset,
+            count: $count
+          ) {
+            totalCount
+            nodes { modId filePath fileName fileExtension fileSize }
+          }
+        }
+        """;
+
+        List<ModFilesResponse.ArchiveFile> allFiles = new ArrayList<>();
+        int offset = 0;
+        int totalCount;
+        do {
+            var pageResponse = nexusGraphQLClient.post()
+                .body(Map.of("query", query, "variables", Map.of(
+                    "modId", modId,
+                    "gameId", gameId,
+                    "offset", offset,
+                    "count", FILE_PAGE_SIZE
+                )))
+                .retrieve()
+                .body(ModFilesResponse.class);
+
+            var contents = pageResponse.data().modFileContents();
+            if (contents.nodes().isEmpty()) {
+                break;
+            }
+            allFiles.addAll(contents.nodes());
+            totalCount = contents.totalCount();
+            offset += FILE_PAGE_SIZE;
+        } while (allFiles.size() < totalCount);
+
+        return allFiles;
+    }
 }
