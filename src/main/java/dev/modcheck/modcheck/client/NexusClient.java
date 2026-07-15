@@ -1,6 +1,7 @@
 package dev.modcheck.modcheck.client;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -22,6 +23,7 @@ public class NexusClient {
         this.nexusGraphQLClient = nexusGraphQLClient;
     }
 
+    @Cacheable(cacheNames = "modMetadata", key = "#gameDomain + ':' + #modId")
     public ModMetadata getModMetadata(String gameDomain, int modId) {
         return nexusRestClient.get()
             .uri("/games/{game}/mods/{id}.json", gameDomain, modId)
@@ -58,6 +60,8 @@ public class NexusClient {
         return response.data().collection();
     }
 
+
+    @Cacheable(cacheNames = "modFiles", key = "#gameId + ':' + #modId")
     public List<ModFilesResponse.ArchiveFile> getModFiles(int gameId, int modId) {
         String query = """
         query ModFiles($modId: Int!, $gameId: Int!, $offset: Int!, $count: Int!) {
