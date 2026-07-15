@@ -1,14 +1,14 @@
 package dev.modcheck.modcheck.domain;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 @Entity
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
+@Builder
 @Table(name = "check_input_file")
 public class CheckInputFile {
     @Id

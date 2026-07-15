@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record CollectionResponse(CollectionData data) {
+public record CollectionResponse(CollectionData data, List<ModFilesResponse.GraphQlError> errors) {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CollectionData(ModCollection collection) {}

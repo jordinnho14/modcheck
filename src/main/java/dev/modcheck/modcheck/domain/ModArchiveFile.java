@@ -1,14 +1,14 @@
 package dev.modcheck.modcheck.domain;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 @Entity
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
+@Builder
 @Table(name = "mod_archive_file")
 public class ModArchiveFile {
     @Id

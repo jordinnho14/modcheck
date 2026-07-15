@@ -17,22 +17,4 @@ public class ModcheckApplication {
 		SpringApplication.run(ModcheckApplication.class, args);
 	}
 
-    @Bean
-    CommandLineRunner checkpointA(NexusClient client) {
-        return args -> {
-            var mod = client.getModMetadata("skyrimspecialedition", 1090);
-            System.out.println("Fetched: " + mod.name() + " v" + mod.version()
-                + " by " + mod.author() + " (available: " + mod.available() + ")");
-
-
-            var collection = client.getCollection("xk05aw");
-            System.out.println("Collection: " + collection.name()
-                + " rev " + collection.latestPublishedRevision().revisionNumber()
-                + " with " + collection.latestPublishedRevision().modFiles().size() + " files");
-
-            var files = client.getModFiles(1704, 1090);
-            System.out.println("Apocalypse has " + files.size() + " archive files");
-        };
-    }
-
 }

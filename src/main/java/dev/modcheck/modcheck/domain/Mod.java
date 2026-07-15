@@ -1,9 +1,7 @@
 package dev.modcheck.modcheck.domain;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 import java.time.OffsetDateTime;
 
@@ -12,6 +10,8 @@ import java.time.OffsetDateTime;
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class Mod {
 
     @Id

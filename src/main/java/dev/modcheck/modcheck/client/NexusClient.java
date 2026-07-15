@@ -1,5 +1,6 @@
 package dev.modcheck.modcheck.client;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -7,10 +8,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Component
 public class NexusClient {
 
     private static final int FILE_PAGE_SIZE = 100;
+    private static final int MAX_FILE_OFFSET = 10_000;
     private final RestClient nexusRestClient;
     private final RestClient nexusGraphQLClient;
 
@@ -47,6 +50,11 @@ public class NexusClient {
             .body(Map.of("query", query, "variables", Map.of("slug", slug)))
             .retrieve()
             .body(CollectionResponse.class);
+
+        if (response.data() == null) {
+            throw new IllegalStateException("GraphQL error fetching collection: " + slug
+                + ": " + response.errors());
+        }
         return response.data().collection();
     }
 
@@ -69,7 +77,7 @@ public class NexusClient {
 
         List<ModFilesResponse.ArchiveFile> allFiles = new ArrayList<>();
         int offset = 0;
-        int totalCount;
+        int totalCount = 0;
         do {
             var pageResponse = nexusGraphQLClient.post()
                 .body(Map.of("query", query, "variables", Map.of(
@@ -81,6 +89,11 @@ public class NexusClient {
                 .retrieve()
                 .body(ModFilesResponse.class);
 
+            if (pageResponse.data() == null) {
+                throw new IllegalStateException("GraphQL error fetching files for mod " + modId
+                    + ": " + pageResponse.errors());
+            }
+
             var contents = pageResponse.data().modFileContents();
             if (contents.nodes().isEmpty()) {
                 break;
@@ -88,7 +101,12 @@ public class NexusClient {
             allFiles.addAll(contents.nodes());
             totalCount = contents.totalCount();
             offset += FILE_PAGE_SIZE;
-        } while (allFiles.size() < totalCount);
+        } while (allFiles.size() < totalCount && offset < MAX_FILE_OFFSET);
+
+        if (allFiles.size() < totalCount) {
+            log.warn("File listing truncated for mod {}: fetched {} of {} (Nexus pagination limit)",
+                modId, allFiles.size(), totalCount);
+        }
 
         return allFiles;
     }
