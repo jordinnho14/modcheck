@@ -1,9 +1,7 @@
 package dev.modcheck.modcheck.domain;
 
 import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -12,6 +10,8 @@ import org.hibernate.type.SqlTypes;
 @Setter
 @NoArgsConstructor
 @Table(name = "mod_requirement")
+@AllArgsConstructor
+@Builder
 public class ModRequirement {
 
     @Id
@@ -33,5 +33,8 @@ public class ModRequirement {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private String raw;
+
+    @Column(name = "required_nexus_mod_id")
+    private Integer requiredNexusModId;
 
 }

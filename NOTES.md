@@ -48,6 +48,49 @@ Newest entries at the bottom of each section.
   textures rather than plugins.
 - **Where:** NexusClient.getModFiles; first ingestion run.
 
+### Collections can pin mods that no longer exist
+- **What happened:** Mod 631, pinned in the collection revision, returns 404
+  from the metadata endpoint — delisted/hidden/deleted from Nexus but still
+  referenced by the collection. Third distinct failure of first ingestion.
+- **Resolution:** Catch the 404, store a placeholder Mod built from the
+  collection's pinned data (name/version from ModRef), flagged
+  `available = false`. The one legitimate exception to the vintage rule:
+  when current truth is gone, pinned truth is all there is.
+- **Product insight:** this isn't just error handling — "this collection
+  depends on a mod that no longer exists" is one of the most valuable
+  warnings the checker can give. The `available` column was designed for
+  exactly this; increment 2's report should surface it.
+
+### totalCount doesn't always match retrievable results
+- **What happened:** several truncation warns fired *below* the 10k cap
+  ("fetched 560 of 686", "fetched 8000 of 21584") — the empty-page guard
+  tripped while totalCount claimed more existed. Their ES totalCount appears
+  inflated (or differently filtered) relative to what pagination actually
+  serves.
+- **Status:** behaviour is correct (take what exists, log the gap); the warn
+  message wording ("pagination limit") is inaccurate for the sub-cap cases —
+  soften to "fetched X of reported Y". Not yet investigated further.
+
+### Requirements schema mapped via introspection (increment 2 spike)
+- **How:** walked the type graph with raw `__type` introspection curls —
+  no playground, no docs. Mod → modRequirements (NON_NULL object) →
+  { nexusRequirements (ModRequirementPage: totalCount + nodes),
+  dlcRequirements (official DLC deps — future feature: "needs Anniversary
+  Edition"), modsRequiringThisMod (reverse edge — v2 recommender fuel) }.
+- **ModRequirement node fields:** modId + gameId (**GraphQL ID scalars —
+  serialize as JSON strings**, e.g. "30379"), modName, externalRequirement
+  (Boolean — marks non-Nexus requirements like ENB; SKSE is *false*
+  because it has a Nexus page despite off-site distribution), notes, url.
+  NON_NULL honoured with **empty strings, not nulls** — blank-checks
+  needed, not null-checks.
+- **Lookup confirmed:** `mod(modId: ID!, gameId: ID!)` — guessed right,
+  verified by introspecting the Query type's args.
+- **Proof query:** SkyUI (12604) → totalCount 1: "Skyrim Script Extender
+  (SKSE64)" modId 30379. The textbook dependency, found first try.
+- **Pagination:** page furniture present but requirement lists are tiny
+  (handfuls, not thousands) — reuse the existing loop pattern anyway,
+  it's already written.
+
 ### Rate limits are generous but real
 - 2,000 requests/hour, 20,000/day (x-rl-* headers on REST v1).
 - A first ingest of a ~99-file collection costs roughly 200 calls
@@ -103,17 +146,141 @@ Newest entries at the bottom of each section.
    work git identity (per-repo user config), Apple's 2007 Bash blocking
    SDKMAN (brew bash). Every fix scoped to the repo; the build is now
    self-contained on any machine.
-3. **First ingestion, two failures, both instructive** — NPE on null data()
-   (missing GraphQL error handling; added it), then the self-identifying
-   ES pagination error (capped; see findings). ~60 mods ingested cleanly
-   before each failure; @Transactional rolled back both times as designed.
+3. **First ingestion, three failures, all instructive** — (1) NPE on null
+   data() — GraphQL errors arrive as HTTP 200 with an errors array; added
+   error components + guards, which turned failure (2) into a
+   self-describing message: the ES max_result_window discovery (capped).
+   (3) 404 on a delisted mod still pinned by the collection (placeholder +
+   available=false). ~60, ~60, and ~90 mods deep respectively — each fix
+   cleared more of the gauntlet. @Transactional rolled back cleanly all
+   three times; the successful run was checkRunId 4 because Postgres
+   sequences don't roll back (runs 1–3 are the ghosts of the failures).
 
 ---
 
+## Increment 1 — COMPLETE (receipt: {"checkRunId":4,"modCount":96,"fileCount":99})
+
+**What was built:** a Spring Boot 4 / Java 21 service that ingests a Nexus
+collection end to end. POST /check with a collection slug → GraphQL walk of
+the collection's latest revision → per new mod, REST metadata fetch +
+paginated GraphQL file-contents fetch → everything persisted to Postgres
+(Flyway-versioned schema, 7 tables). Redis is provisioned but not yet used.
+
+**The pipeline:** NexusClient (2 pre-configured RestClients, auth baked in,
+GraphQL envelope/pagination/ES-cap absorbed, errors surfaced) → CheckService
+(@Transactional orchestration: game resolve-or-create via first-mod
+metadata borrow, mod upsert on the (game, nexus_mod_id) composite key,
+delisted-mod placeholders, per-file CheckInputFile rows) → thin
+CheckController.
+
+**Proven against real-world hostility:** wrong-typed docs, per-game ID
+scoping, GraphQL errors-as-200s, an upstream Elasticsearch pagination
+ceiling, inflated totalCounts, and delisted-but-pinned mods — all in one
+99-file collection.
+
+**The receipt decoded:** 99 files = complete collection recorded; 96 mods =
+dedupe working (multi-file mods collapse to one row); available=false on
+one row = the delisted mod, already useful signal for increment 2's report.
+
+**Not yet:** caching (first ingest ≈ 200 API calls / ~90s; second ingest of
+overlapping collections should be near-instant once @Cacheable lands — the
+demo), requirements ingestion, any actual *checking*. That's increments
+1.5–2.
+
+---
+
+## Increment 1.5 — Redis caching (receipt: 53.3s → 6.0s, 9× faster)
+
+**What was added:** @EnableCaching + @Cacheable on the two expensive
+per-mod client calls (getModMetadata, getModFiles), Redis-backed via the
+existing docker-compose Redis. getCollection deliberately uncached —
+revisions move, and it's one call per ingest anyway.
+
+**The A/B demo (measured):**
+- Run A — cold everything (fresh volumes, empty cache): **53.3s**, ~190
+  HTTP calls to Nexus, both Postgres and Redis filling as side effects.
+- Truncate Postgres only (RESTART IDENTITY CASCADE), keep Redis warm.
+- Run B — identical database work, warm cache: **6.0s**, **1** API call
+  (the uncached collection query). The 47-second difference is exactly
+  the network cost caching deleted.
+- Side benefit: ~190 calls → 1 against their rate limit — the cache is
+  also politeness toward Nexus.
+
+**Config details:**
+- Keys are composite and game-scoped (modMetadata::skyrimspecialedition:45148,
+  modFiles::1704:76892) — the per-game ID lesson again, in cache-key form.
+- Values stored as human-readable JSON with an @class type hint, verified
+  by reading an entry back via redis-cli.
+- Serializer: GenericJacksonJsonRedisSerializer — Boot 4 / Spring Data
+  Redis 4.0 renamed it (no version in the name now; the Jackson-2
+  "GenericJackson2..." variant is deprecated-for-removal). No no-arg
+  constructor anymore: built via its builder with Spring-cache null-value
+  support and default typing enabled (polymorphic type validation
+  restricting deserialization to our packages + java.util).
+- TTL 6h — mod metadata changes on a days-to-months scale; hours-fresh
+  is fresh enough for a pre-install check.
+
+**Mechanism note (interview-grade):** @Cacheable works by proxy — the
+same CGLIB wrapping as @Transactional (visible as $$SpringCGLIB$$ in
+every stack trace). Cache lives in the wrapper, so self-invocation
+bypasses it — the classic "why isn't my annotation working" trap.
+
+**Boot 4 / Jackson 3 migration scar count: three** — annotation package
+split in the records (annotations stayed com.fasterxml, databind moved
+to tools.jackson), dual databind jars on the classpath, and the Redis
+serializer rename/builder API. Pattern: prefer the tools.jackson-flavoured
+option, follow deprecation Javadoc pointers, trust the compiler over docs.
+
+---
+
+## NEXT SESSION — Increment 2 build plan (spike done, all known moves)
+
+**Part 1 — requirements ingestion:**
+1. `client/ModRequirementsResponse.java` — nested records, established
+   pattern: Data(mod) → ModNode(name, modRequirements) →
+   Requirements(nexusRequirements) → NexusRequirements(totalCount, nodes)
+   → RequirementNode(String modId, String gameId, String modName,
+   boolean externalRequirement, String notes, String url).
+   **IDs as String** (GraphQL ID scalar), @JsonIgnoreProperties throughout.
+2. `NexusClient.getModRequirements(int gameId, int modId)` — the proof
+   query verbatim (query Reqs($modId: ID!, $gameId: ID!) { mod(...) {
+   name modRequirements { nexusRequirements { totalCount nodes { modId
+   gameId modName externalRequirement notes url } } } } }); variables as
+   strings (String.valueOf). Null-data error guard from birth.
+   @Cacheable(cacheNames = "modRequirements", key = "#gameId + ':' + #modId").
+3. New `ModRequirementRepository` (plain JpaRepository extension).
+4. In `CheckService.createModWithFiles`, after archive files: fetch
+   requirements, save ModRequirement entities. Mapping:
+    - requiredName = modName
+    - requiredMod = findByGameAndNexusModId(game, Integer.parseInt(modId))
+      — usually misses (required mod not necessarily ingested); null is
+      fine and expected; resolution happens at CHECK time, not ingest time
+    - raw = the node serialized as JSON (jsonb column's first customer)
+5. Truncate + re-ingest (6s on warm cache) and verify:
+   SELECT m.name, r.required_name FROM mod_requirement r
+   JOIN mod m ON m.id = r.mod_id LIMIT 20;
+   — expect SkyUI → SKSE64 among the rows.
+
+**Part 2 — the actual check + report:**
+6. Check query: for run N, which required (game, nexus_mod_id) pairs are
+   NOT among the run's input mods? (@Query on repository, or stream over
+   loaded data — 96 mods, either works.) Only non-external, hard
+   requirements in v1.
+7. `GET /check/{id}/report` — response record with three sections, two
+   nearly free from existing data:
+    - missingDependencies (the new query)
+    - unavailableMods (available = false rows — the delisted-mod warning)
+    - outdatedPins (check_input_file.file_version vs mod.current_version —
+      the two-truths comparison, stored since increment 1)
+8. Definition of done: curl the report, see real findings (this
+   collection genuinely has deps not in the list).
+
+**Housekeeping riding along:** soften the truncation warn wording
+("fetched X of reported Y" — sub-cap cases aren't the pagination limit);
+NexusApiException still parked.
+
 ## Parked / roadmap
 
-- Redis @Cacheable on client methods (metadata + file listings) — the
-  second-ingest speedup is the demo.
 - NexusApiException (typed) to replace IllegalStateException in the client.
 - Async ingestion + status endpoint (long transaction trade-off).
 - Extension-prioritised file fetching within the 10k cap.

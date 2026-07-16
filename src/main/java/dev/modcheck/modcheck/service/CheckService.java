@@ -2,6 +2,7 @@ package dev.modcheck.modcheck.service;
 
 import dev.modcheck.modcheck.client.CollectionResponse.*;
 import dev.modcheck.modcheck.client.ModMetadata;
+import dev.modcheck.modcheck.client.ModRequirementsResponse;
 import dev.modcheck.modcheck.client.NexusClient;
 import dev.modcheck.modcheck.domain.*;
 import dev.modcheck.modcheck.repository.*;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.HttpClientErrorException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.OffsetDateTime;
 import java.util.HashSet;
@@ -27,6 +29,8 @@ public class CheckService {
     private final ModArchiveFileRepository modArchiveFileRepository;
     private final CheckRunRepository checkRunRepository;
     private final CheckInputFileRepository checkInputFileRepository;
+    private final ModRequirementRepository modRequirementRepository;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public IngestResult ingestCollection(String slug) {
@@ -97,7 +101,7 @@ public class CheckService {
                 .nexusModId(modRef.modId())
                 .name(modRef.name())
                 .currentVersion(modRef.version())
-                .available(false)          // ← the column earning its keep
+                .available(false)
                 .adult(false)
                 .lastFetchedAt(OffsetDateTime.now())
                 .build());
@@ -111,7 +115,7 @@ public class CheckService {
             .available(meta.available())
             .adult(meta.containsAdultContent())
             .updatedAt(meta.updatedTime())
-            .lastFetchedAt(java.time.OffsetDateTime.now())
+            .lastFetchedAt(OffsetDateTime.now())
             .build();
 
         mod = modRepository.save(mod);
@@ -126,8 +130,32 @@ public class CheckService {
                 .fileSize(af.fileSize() == null ? null : Long.parseLong(af.fileSize()))
                 .build());
         }
+
+        var requirements = nexusClient.getModRequirements(game.getNexusGameId(), meta.modId());
+        for (var req : requirements) {
+            modRequirementRepository.save(ModRequirement.builder()
+                .mod(mod)
+                .requiredMod(resolveRequiredMod(game, req))
+                .requiredName(req.modName())
+                .raw(toJson(req))
+                .requiredNexusModId((Integer.parseInt(req.modId())))
+                .build());
+        }
         return mod;
     }
+
+    private String toJson(Object value) {
+        return objectMapper.writeValueAsString(value);
+    }
+
+    private Mod resolveRequiredMod(Game game, ModRequirementsResponse.RequirementNode req) {
+        if (req.externalRequirement()) {
+            return null;   // not a Nexus mod; nothing to link
+        }
+        return modRepository.findByGameAndNexusModId(game, Integer.parseInt(req.modId()))
+            .orElse(null);
+    }
+
 
     public record IngestResult(Long checkRunId, int modCount, int fileCount) {}
 }

@@ -114,4 +114,41 @@ public class NexusClient {
 
         return allFiles;
     }
+
+    @Cacheable(cacheNames = "modRequirements", key = "#gameId + ':' + #modId")
+    public List<ModRequirementsResponse.RequirementNode> getModRequirements(int gameId, int modId) {
+        String query = """
+        query Reqs($modId: ID!, $gameId: ID!) {
+          mod(modId: $modId, gameId: $gameId) {
+            name
+            modRequirements {
+              nexusRequirements {
+                totalCount
+                nodes { modId gameId modName externalRequirement notes url }
+              }
+            }
+          }
+        }
+        """;
+
+        var response = nexusGraphQLClient.post()
+            .body(Map.of("query", query, "variables", Map.of(
+                "modId", String.valueOf(modId),
+                "gameId", String.valueOf(gameId)
+            )))
+            .retrieve()
+            .body(ModRequirementsResponse.class);
+
+        if (response.data() == null || response.data().mod() == null) {
+            throw new IllegalStateException("GraphQL error fetching requirements for mod " + modId
+                + ": " + response.errors());
+        }
+
+        var nexusReqs = response.data().mod().modRequirements().nexusRequirements();
+        if (nexusReqs.nodes().size() < nexusReqs.totalCount()) {
+            log.warn("Requirements list truncated for mod {}: fetched {} of {}",
+                modId, nexusReqs.nodes().size(), nexusReqs.totalCount());
+        }
+        return nexusReqs.nodes();
+    }
 }
