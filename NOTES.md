@@ -233,51 +233,53 @@ option, follow deprecation Javadoc pointers, trust the compiler over docs.
 
 ---
 
-## NEXT SESSION — Increment 2 build plan (spike done, all known moves)
+## Increment 2 — COMPLETE (first real report issued)
 
-**Part 1 — requirements ingestion:**
-1. `client/ModRequirementsResponse.java` — nested records, established
-   pattern: Data(mod) → ModNode(name, modRequirements) →
-   Requirements(nexusRequirements) → NexusRequirements(totalCount, nodes)
-   → RequirementNode(String modId, String gameId, String modName,
-   boolean externalRequirement, String notes, String url).
-   **IDs as String** (GraphQL ID scalar), @JsonIgnoreProperties throughout.
-2. `NexusClient.getModRequirements(int gameId, int modId)` — the proof
-   query verbatim (query Reqs($modId: ID!, $gameId: ID!) { mod(...) {
-   name modRequirements { nexusRequirements { totalCount nodes { modId
-   gameId modName externalRequirement notes url } } } } }); variables as
-   strings (String.valueOf). Null-data error guard from birth.
-   @Cacheable(cacheNames = "modRequirements", key = "#gameId + ':' + #modId").
-3. New `ModRequirementRepository` (plain JpaRepository extension).
-4. In `CheckService.createModWithFiles`, after archive files: fetch
-   requirements, save ModRequirement entities. Mapping:
-    - requiredName = modName
-    - requiredMod = findByGameAndNexusModId(game, Integer.parseInt(modId))
-      — usually misses (required mod not necessarily ingested); null is
-      fine and expected; resolution happens at CHECK time, not ingest time
-    - raw = the node serialized as JSON (jsonb column's first customer)
-5. Truncate + re-ingest (6s on warm cache) and verify:
-   SELECT m.name, r.required_name FROM mod_requirement r
-   JOIN mod m ON m.id = r.mod_id LIMIT 20;
-   — expect SkyUI → SKSE64 among the rows.
+**What was built:** requirements ingestion + the first actual check.
+- `getModRequirements` on the client (proof-query verbatim, @Cacheable,
+  truncation sentinel instead of a pagination loop — requirement lists
+  are single digits).
+- V2 Flyway migration adding `required_nexus_mod_id` — first real use of
+  the migration machinery. Reason: the `required_mod_id` FK was
+  **ingestion-order-dependent** (only linked mods already ingested when
+  the requirement row was written — Address Library linked for
+  late-alphabet mods, not early ones). Fix: store *their* stable fact
+  (the nexus id) at write time; resolve presence at **check time** by
+  query. Principle: store raw facts on write, compute conclusions on read.
+- `findMissingRequirements` JPQL: requirements of the run's input mods,
+  excluding externals (modId 0), whose required nexus id is not among the
+  input mods' nexus ids. Set difference in JPQL clothes.
+- `CheckReportService` (@Transactional(readOnly = true) — lazy walks safe
+  by design) + `GET /check/{id}/report`: three sections —
+  missingDependencies (grouped, most-required first), unavailableMods
+  (available=false), outdatedPins (pinned vs current version).
 
-**Part 2 — the actual check + report:**
-6. Check query: for run N, which required (game, nexus_mod_id) pairs are
-   NOT among the run's input mods? (@Query on repository, or stream over
-   loaded data — 96 mods, either works.) Only non-external, hard
-   requirements in v1.
-7. `GET /check/{id}/report` — response record with three sections, two
-   nearly free from existing data:
-    - missingDependencies (the new query)
-    - unavailableMods (available = false rows — the delisted-mod warning)
-    - outdatedPins (check_input_file.file_version vs mod.current_version —
-      the two-truths comparison, stored since increment 1)
-8. Definition of done: curl the report, see real findings (this
-   collection genuinely has deps not in the list).
+**First report findings (run 1, xk05aw rev 311):**
+- 16 missing dependencies, ~12 genuine (MergeMapper, XPMSSE, Crash
+  Logger, Community Shaders, SkyUI Survival Mode Integration...).
+- **VR noise confirmed:** 4 entries are VR variants (SKSEVR, VR Address
+  Library, poT Tweaks VR, BOS VR) — authors declare requirements for both
+  editions; the API doesn't platform-scope them. Decision: documented
+  limitation for v1 rather than a name-substring filter (crude heuristics
+  misfire; honest limitation reads better).
+- **SKSE64 was NOT missing** — this collection bundles it. (Prediction
+  wrong, check right — it read the data, not the expectation.)
+- **outdatedPins is really versionMismatches:** PunknPatch pinned 3.0 vs
+  "current" 1.0, SkyUI 6.11 vs 6.9 — the mod page's headline version can
+  LAG file versions, so mismatches are directionless. Rename or document.
+- unavailableMods: exactly one — mod 631, the delisted placeholder,
+  identified as "Bethini Pie". Delisted-mod handling end-to-end.
 
-**Housekeeping riding along:** soften the truncation warn wording
-("fetched X of reported Y" — sub-cap cases aren't the pagination limit);
-NexusApiException still parked.
+**Also learned:** externals (VC++ redist etc.) arrive with modId "0",
+empty names, payload in url — their null convention. The `raw` jsonb
+column paid off immediately (forensics on blank rows) and is queryable
+(`raw->>'externalRequirement'`), not just archival. Future cheap feature:
+an externalRequirements FYI report section, deduped by URL.
+
+**Open decisions carried:** VR-variant handling (limitation vs filter),
+outdatedPins naming, externals FYI section.
+
+---
 
 ## Parked / roadmap
 
