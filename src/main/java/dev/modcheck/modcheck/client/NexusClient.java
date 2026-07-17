@@ -54,7 +54,7 @@ public class NexusClient {
             .body(CollectionResponse.class);
 
         if (response.data() == null) {
-            throw new IllegalStateException("GraphQL error fetching collection: " + slug
+            throw new NexusApiException("GraphQL error fetching collection: " + slug
                 + ": " + response.errors());
         }
         return response.data().collection();
@@ -94,7 +94,7 @@ public class NexusClient {
                 .body(ModFilesResponse.class);
 
             if (pageResponse.data() == null) {
-                throw new IllegalStateException("GraphQL error fetching files for mod " + modId
+                throw new NexusApiException("GraphQL error fetching files for mod " + modId
                     + ": " + pageResponse.errors());
             }
 
@@ -140,7 +140,7 @@ public class NexusClient {
             .body(ModRequirementsResponse.class);
 
         if (response.data() == null || response.data().mod() == null) {
-            throw new IllegalStateException("GraphQL error fetching requirements for mod " + modId
+            throw new NexusApiException("GraphQL error fetching requirements for mod " + modId
                 + ": " + response.errors());
         }
 
