@@ -116,7 +116,7 @@ public class CheckReportService {
         return s != null && !s.isBlank();
     }
 
-    private static String severityOf(String extension) {
+    static String severityOf(String extension) {
         if (extension == null) {
             return "low";
         }
@@ -124,14 +124,14 @@ public class CheckReportService {
         return HIGH_RISK_EXTENSIONS.contains(normalized.toLowerCase()) ? "high" : "low";
     }
 
-    private static String normalize(String filePath) {
+    static String normalize(String filePath) {
         String path = filePath.regionMatches(true, 0, "Data/", 0, 5)
             ? filePath.substring(5)
             : filePath;
         return path.toLowerCase();
     }
 
-    private static boolean isInstallerMetadata(String filePath) {
+    static boolean isInstallerMetadata(String filePath) {
         return normalize(filePath).startsWith("fomod/");
     }
 
