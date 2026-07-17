@@ -281,6 +281,44 @@ outdatedPins naming, externals FYI section.
 
 ---
 
+## Increment 3 — file-overlap conflict detection
+
+**What was built:** the file-conflict half of the "conflict checker" pitch
+that's been in the README title since day one but unimplemented until now.
+- `findConflictingFiles` on `ModArchiveFileRepository`: same
+  subquery-in-subquery shape as `findMissingRequirements` — restrict to the
+  check run's input mods, group by `file_path`, keep only paths with
+  `count(distinct mod_id) > 1`.
+- `CheckReportService` groups the results by path into a new `fileConflicts`
+  section, severity-tagged by extension.
+- **Severity is a plain extension allowlist** (`.esp/.esl/.esm/.dll/.pex` =
+  high, everything else = low) — not real load-order or plugin-record
+  analysis, just the "textures vs. plugins" distinction from the ES-cap
+  discovery above, finally acted on instead of just noted.
+- The `file_path` index has been sitting in the V1 migration, unused, since
+  the very first schema — the migration comment literally says "Increment
+  3's conflict detection works off file_path; index accordingly." Nice to
+  finally cash that in.
+
+**Verified against a live run (xk05aw rev 311):** 52 file conflicts found,
+all correctly matched against real ingested data — but every single one
+came back `"severity":"low"`, including two `.pex` script files that
+should have been `"high"`. Root cause: Nexus's GraphQL API returns
+`fileExtension` **with a leading dot** (`.pex`, not `pex`) — confirmed by
+querying `mod_archive_file` directly. The extension allowlist was checking
+for bare values, so every comparison silently failed. Fixed by stripping
+a leading `.` before the lowercase comparison, so it's tolerant of either
+format rather than assuming one. Exactly the failure mode `.pex`-style
+"trust the API's errors over its documentation" lessons from Stage 0 exist
+to catch — didn't verify the actual field format before writing the
+allowlist, and real data caught it immediately.
+
+**Parked, not done:** severity is still just an extension list, not real
+plugin-record inspection — documented honestly as a limitation rather than
+oversold.
+
+---
+
 ## Parked / roadmap
 
 - NexusApiException (typed) to replace IllegalStateException in the client.

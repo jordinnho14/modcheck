@@ -22,7 +22,9 @@ into Postgres. Then:
 GET /check/{id}/report
 ```
 
-returns the findings. Real output against a popular Skyrim SE collection:
+returns the findings. Real output against a popular Skyrim SE collection
+(the `fileConflicts` entry below is illustrative — that field didn't exist
+yet when this particular run was captured):
 
 ```json
 {
@@ -49,6 +51,13 @@ returns the findings. Real output against a popular Skyrim SE collection:
       "modName": "powerofthree's Tweaks",
       "pinnedVersion": "1.15.1",
       "currentVersion": "1.16.0"
+    }
+  ],
+  "fileConflicts": [
+    {
+      "filePath": "example/path/to/a/shared/file.esp",
+      "severity": "high",
+      "mods": ["Example Mod A", "Example Mod B"]
     }
   ]
 }
@@ -94,6 +103,9 @@ listings, and requirements are cached for 6 hours.
   declared by the input mods, minus externals, minus mods actually present.
   Requirements store Nexus's raw mod id at ingest; presence is resolved when
   you ask, not when data is written.
+- **File conflicts are a self-join on `file_path`:** any archive file whose
+  path is shared by 2+ distinct mods in the check run's input set is a
+  conflict, grouped by path and flagged high/low risk by extension.
 
 ## Known limitations (honest ones)
 
@@ -109,7 +121,11 @@ listings, and requirements are cached for 6 hours.
 - **External requirements** (VC++ redistributables, off-Nexus tools) are
   stored but excluded from the missing check — they can't be in a
   collection by definition.
-- File-overlap conflict detection is planned but not yet built.
+- **File-conflict severity is a simple extension allowlist** (`.esp/.esl/.esm/.dll/.pex`
+  = high, everything else = low), not real load-order or plugin-record
+  analysis. It's a reasonable first filter — asset overwrites really are
+  the least dangerous conflict class — but it can't tell you whether a
+  "high" conflict is actually a problem, only that it's worth a human look.
 
 ## Notes
 
