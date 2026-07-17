@@ -308,14 +308,31 @@ should have been `"high"`. Root cause: Nexus's GraphQL API returns
 querying `mod_archive_file` directly. The extension allowlist was checking
 for bare values, so every comparison silently failed. Fixed by stripping
 a leading `.` before the lowercase comparison, so it's tolerant of either
-format rather than assuming one. Exactly the failure mode `.pex`-style
-"trust the API's errors over its documentation" lessons from Stage 0 exist
-to catch — didn't verify the actual field format before writing the
-allowlist, and real data caught it immediately.
+format rather than assuming one. Exactly the failure mode "trust the API's
+errors over its documentation" lessons from Stage 0 exist to catch —
+didn't verify the actual field format before writing the allowlist, and
+real data caught it immediately.
 
 **Parked, not done:** severity is still just an extension list, not real
 plugin-record inspection — documented honestly as a limitation rather than
 oversold.
+
+**Second round, same real run:** the fix above was correct, but the same
+xk05aw run surfaced a domain-knowledge gap rather than a code bug — most
+of the 52 "conflicts" were `fomod/ModuleConfig.xml`, `fomod/info.xml` and
+similar, appearing under three different cases (`fomod/`, `FOMOD/`,
+`FOMod/`) as three separate entries. Two things going on:
+- **FOMOD files aren't real conflicts at all.** They're installer metadata
+  the mod manager reads during setup, never extracted into the game
+  folder — every FOMOD-packaged mod has them, so they were pure noise,
+  not even low-risk. Excluded entirely now (`lower(file_path) not like
+  'fomod/%'`), same move as excluding externals from the missing-dependency
+  check.
+- **Path comparison was case-sensitive**, which doesn't match how the
+  actual target filesystem (NTFS, on basically every real install) treats
+  paths. Fixed query and grouping to compare on `lower(file_path)`
+  throughout, picking one real-cased path per group for display rather
+  than showing the lowercased key.
 
 ---
 

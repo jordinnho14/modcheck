@@ -72,16 +72,25 @@ public class CheckReportService {
             ))
             .toList();
 
-        List<ModArchiveFile> conflictingFiles = modArchiveFileRepository.findConflictingFiles(checkRunId);
+        List<ModArchiveFile> allFiles = modArchiveFileRepository.findArchiveFilesForCheckRun(checkRunId);
 
-        Map<String, List<ModArchiveFile>> byFilePath = conflictingFiles.stream()
-            .collect(Collectors.groupingBy(ModArchiveFile::getFilePath));
+// Group by a normalized path so packaging differences that all mean
+// "the same real file once installed" collapse into one conflict
+// instead of several partial ones. Rules found via real data:
+//   - fomod/ is installer metadata, never actually installed — excluded.
+//   - case-folded, since NTFS doesn't distinguish Meshes/X from meshes/x.
+//   - a leading Data/ is stripped, since mods are packaged both with
+//     and without it and both land in the same place on install.
+        Map<String, List<ModArchiveFile>> byNormalizedPath = allFiles.stream()
+            .filter(af -> !isInstallerMetadata(af.getFilePath()))
+            .collect(Collectors.groupingBy(af -> normalize(af.getFilePath())));
 
-        List<CheckReport.FileConflict> fileConflicts = byFilePath.entrySet().stream()
-            .map(entry -> new CheckReport.FileConflict(
-                entry.getKey(),
-                severityOf(entry.getValue().getFirst().getExtension()),
-                entry.getValue().stream()
+        List<CheckReport.FileConflict> fileConflicts = byNormalizedPath.values().stream()
+            .filter(files -> files.stream().map(af -> af.getMod().getId()).distinct().count() > 1)
+            .map(files -> new CheckReport.FileConflict(
+                files.stream().map(ModArchiveFile::getFilePath).min(Comparator.comparingInt(String::length)).orElseThrow(),
+                severityOf(files.getFirst().getExtension()),
+                files.stream()
                     .map(af -> af.getMod().getName())
                     .distinct()
                     .sorted()
@@ -113,6 +122,17 @@ public class CheckReportService {
         }
         String normalized = extension.startsWith(".") ? extension.substring(1) : extension;
         return HIGH_RISK_EXTENSIONS.contains(normalized.toLowerCase()) ? "high" : "low";
+    }
+
+    private static String normalize(String filePath) {
+        String path = filePath.regionMatches(true, 0, "Data/", 0, 5)
+            ? filePath.substring(5)
+            : filePath;
+        return path.toLowerCase();
+    }
+
+    private static boolean isInstallerMetadata(String filePath) {
+        return normalize(filePath).startsWith("fomod/");
     }
 
     public record CheckReport(
