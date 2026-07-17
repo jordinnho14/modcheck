@@ -6,7 +6,7 @@ Give it a collection slug, and it tells you — *before* you install anything �
 which required mods are missing from the collection, which pinned mods no
 longer exist on Nexus, and where pinned versions don't match current ones.
 
-**Stack:** Java 21 · Spring Boot 4 · PostgreSQL (Flyway) · Redis · Nexus Mods REST v1 + GraphQL v2
+**Stack:** Java 21 · Spring Boot 4 · PostgreSQL (Flyway) · Redis · Nexus Mods REST v1 + GraphQL v2 · springdoc-openapi
 
 ## What it does
 
@@ -63,6 +63,17 @@ yet when this particular run was captured):
 }
 ```
 
+There's also `POST /check/mod-list` for checking a plain list of mod ids
+with no Nexus Collection involved — useful if you've got your own local
+pile of mods rather than a published, curated Collection:
+
+```
+POST /check/mod-list  {"gameDomain": "skyrimspecialedition", "modIds": [12604, 30379]}
+```
+
+Same `GET /check/{id}/report` afterwards either way — the report layer
+doesn't know or care which endpoint put the rows there.
+
 ## Running it
 
 You'll need Docker, Java 21, and a [Nexus Mods API key](https://www.nexusmods.com/users/myaccount?tab=api).
@@ -87,6 +98,13 @@ A first ingest makes a few hundred API calls (~1 minute). Repeat ingests hit
 the Redis cache (~190 calls → 1, roughly 9× faster) — metadata, file
 listings, and requirements are cached for 6 hours.
 
+Or skip `curl` entirely: once the app is running, open `http://localhost:8080/`
+for a small built-in UI — a single static page, no separate build step —
+that wraps both endpoints above and renders the report as readable
+sections instead of raw JSON. There's also interactive API docs via
+springdoc at `http://localhost:8080/swagger-ui/index.html`, if you'd
+rather explore the raw endpoints with a "try it out" button.
+
 ## How it works
 
 - **Ingestion** walks the collection via GraphQL v2 (collections and file
@@ -103,9 +121,19 @@ listings, and requirements are cached for 6 hours.
   declared by the input mods, minus externals, minus mods actually present.
   Requirements store Nexus's raw mod id at ingest; presence is resolved when
   you ask, not when data is written.
-- **File conflicts are a self-join on `file_path`:** any archive file whose
-  path is shared by 2+ distinct mods in the check run's input set is a
-  conflict, grouped by path and flagged high/low risk by extension.
+- **File conflicts are grouped in Java on a normalized path**, not in SQL:
+  the repository just fetches every archive file for the check run's mods;
+  `CheckReportService` case-folds the path, strips a leading `Data/` (mods
+  are packaged both with and without it, landing in the same place either
+  way), and drops `fomod/` entirely before grouping — a conflict is any
+  normalized path shared by 2+ distinct mods, flagged high/low risk by
+  extension. Moved out of SQL once the matching rules outgrew a readable
+  nested query.
+- **MOD_LIST input reuses the reporting layer completely unchanged.** Every
+  report query works off `check_run_id` → `mod_id`, with no awareness of
+  how those rows got created. Checking a bare mod-id list needed a new
+  ingestion path (`ingestModList`); it needed zero changes to how results
+  get reported.
 
 ## Known limitations (honest ones)
 

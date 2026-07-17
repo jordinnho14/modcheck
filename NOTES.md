@@ -308,10 +308,10 @@ should have been `"high"`. Root cause: Nexus's GraphQL API returns
 querying `mod_archive_file` directly. The extension allowlist was checking
 for bare values, so every comparison silently failed. Fixed by stripping
 a leading `.` before the lowercase comparison, so it's tolerant of either
-format rather than assuming one. Exactly the failure mode "trust the API's
-errors over its documentation" lessons from Stage 0 exist to catch —
-didn't verify the actual field format before writing the allowlist, and
-real data caught it immediately.
+format rather than assuming one. Exactly the failure mode `.pex`-style
+"trust the API's errors over its documentation" lessons from Stage 0 exist
+to catch — didn't verify the actual field format before writing the
+allowlist, and real data caught it immediately.
 
 **Parked, not done:** severity is still just an extension list, not real
 plugin-record inspection — documented honestly as a limitation rather than
@@ -333,6 +333,84 @@ similar, appearing under three different cases (`fomod/`, `FOMOD/`,
   paths. Fixed query and grouping to compare on `lower(file_path)`
   throughout, picking one real-cased path per group for display rather
   than showing the lowercased key.
+
+**Regression tests added, finally.** `normalize`, `isInstallerMetadata`,
+and `severityOf` are pure functions with no Spring/DB dependency — dropped
+from `private` to package-private so `CheckReportServiceTest` can call
+them directly, no `@SpringBootTest` or Postgres needed. Every case is one
+of the three real bugs above, not an invented one: dotted vs. bare
+extensions, fomod exclusion (including under a `Data/` prefix, and *not*
+matching "fomod" as a mere substring of a filename), and the `Data/`-prefix
+strip itself (including a short-string edge case that could've thrown on
+`regionMatches`). Would've caught all three bugs before manual testing did,
+had they existed first — the honest order was bug found live, then test
+written after the fact, not test-first.
+
+---
+
+## Increment 4 — MOD_LIST input type
+
+**What was built:** the second half of `InputType` that had sat unused
+since the V1 migration — the schema comment literally said `'COLLECTION' |
+'MOD_LIST'` from day one, but only `COLLECTION` was ever wired up.
+`POST /check/mod-list` `{"gameDomain": "...", "modIds": [...]}` checks a
+plain list of mod ids with no Nexus Collection involved — useful for
+someone with their own local pile of mods rather than a published,
+curated Collection.
+
+**One real schema gap, not a shortcut:** `check_input_file.nexus_file_id`
+was `NOT NULL`, but a mod-list check has no pinned file to report — no
+collection revision to pin *from*. Rather than reuse a sentinel value
+(the project already learned that lesson the hard way in Increment 2,
+with the ingestion-order-dependent `required_mod_id` FK), this got a real
+V3 migration dropping the `NOT NULL`, with the entity updated to match.
+`source_ref`/`revision` on `check_run` were already nullable from the very
+first migration — nice bit of foresight that meant no change needed there.
+
+**Zero changes needed in `CheckReportService`.** Every report query
+filters by `check_run_id` → `mod_id`, generically, with no awareness of
+*how* those rows got created. `outdatedPins`' existing `hasText(fileVersion)`
+guard already skips rows with no pinned version to compare — exactly what
+a mod-list row has — without a single line changed. The "two truths, two
+tables" / generic `CheckInputFile` modeling from Increment 1 paying off
+three increments later, for a case it wasn't explicitly designed for.
+
+**Shared code:** `createGame` was collection-shaped (took a `List<CollectionModFile>`
+just to reach into the first one for a bootstrap mod id) — refactored to take
+a plain `int firstModId`, so both ingestion paths share it. Delisted-mod
+handling is shared too: mod-list ids with no name/version to fall back on
+(no collection data to borrow from) get a synthetic placeholder
+(`"Unknown mod " + modId`) through the same `ModRef`-shaped path collection
+ingestion already uses for its own delisted mods.
+
+**Verified against a live run.** `POST /check/mod-list` with SkyUI (12604)
+alone → report correctly flags SKSE64 (30379) as missing, required by
+SkyUI — the exact same `findMissingRequirements` query collection-based
+checks have always used, with zero special-casing for how the input rows
+were created. Checking SkyUI + SKSE64 together → `missingDependencies`
+correctly empty. `sourceRef`/`revision` both `null` as expected for a
+mod-list run. Two genuinely different ingestion paths, one reporting
+layer, no branching needed — the schema modeling did its job.
+
+**Third round, same real run:** a false negative this time, not a false
+positive — worse, since the whole point of the tool is not missing things.
+Several genuine conflicts were split in half: `meshes/.../milllogpile.nif`
+and `Data/meshes/.../milllogpile.nif` showed up as two separate, smaller
+conflicts instead of one real one, because some mods package their archive
+with a `Data/` root and others don't — both land in the same place on
+install, but the tool compared the raw strings and saw two unrelated paths.
+At least 5 pairs like this in one run.
+
+Fixing it meant a third normalization rule (strip a leading `Data/` before
+comparing) on top of the two already there (fomod exclusion, case-folding).
+Stacking a third `CASE`-style rule into the nested SQL subquery was going to
+stop being readable, so the matching logic moved out of SQL entirely:
+`findArchiveFilesForCheckRun` now just fetches the check run's archive
+files, and `CheckReportService` does the normalize → group → filter
+(`count(distinct mod) > 1`) in plain Java. Slightly more rows fetched than
+the old query pulled, a non-issue at this scale (hundreds of mods, not
+millions of rows) — and each future packaging quirk is one more line
+instead of one more layer of subquery.
 
 ---
 

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ModCheck</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+        h1 { margin-bottom: 0.25rem; }
+        .sub { color: #666; margin-top: 0; }
+        fieldset { margin-bottom: 1.5rem; padding: 1rem; }
+        label { display: block; margin-bottom: 0.25rem; font-weight: bold; }
+        input[type=text] { width: 100%; padding: 0.4rem; box-sizing: border-box; margin-bottom: 0.75rem; }
+        button { padding: 0.5rem 1rem; cursor: pointer; }
+        #status { margin: 1rem 0; font-style: italic; color: #666; }
+        section { margin-bottom: 1.5rem; }
+        section h2 { border-bottom: 1px solid #ddd; padding-bottom: 0.25rem; }
+        .empty { color: #888; font-style: italic; }
+        ul { padding-left: 1.2rem; }
+        .severity-high { color: #b00020; font-weight: bold; }
+        .severity-low { color: #8a6d00; }
+        .conflict-path { font-family: monospace; }
+        .error { color: #b00020; }
+    </style>
+</head>
+<body>
+<h1>ModCheck</h1>
+<p class="sub">Pre-install dependency and conflict checker for Nexus Mods collections.</p>
+
+<fieldset>
+    <legend>Check a Collection</legend>
+    <label for="collectionSlug">Collection slug</label>
+    <input type="text" id="collectionSlug" placeholder="e.g. xk05aw">
+    <button onclick="checkCollection()">Check collection</button>
+</fieldset>
+
+<fieldset>
+    <legend>Check a Mod List</legend>
+    <label for="gameDomain">Game domain</label>
+    <input type="text" id="gameDomain" placeholder="e.g. skyrimspecialedition">
+    <label for="modIds">Mod IDs (comma-separated)</label>
+    <input type="text" id="modIds" placeholder="e.g. 12604, 30379">
+    <button onclick="checkModList()">Check mod list</button>
+</fieldset>
+
+<div id="status"></div>
+<div id="report"></div>
+
+<script>
+    async function checkCollection() {
+        const slug = document.getElementById('collectionSlug').value.trim();
+        if (!slug) { alert('Enter a collection slug.'); return; }
+        await runCheck('/check', { collectionSlug: slug });
+    }
+
+    async function checkModList() {
+        const gameDomain = document.getElementById('gameDomain').value.trim();
+        const idsRaw = document.getElementById('modIds').value.trim();
+        if (!gameDomain || !idsRaw) { alert('Enter a game domain and at least one mod ID.'); return; }
+        const modIds = idsRaw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+        if (modIds.length === 0) { alert('Could not parse any mod IDs.'); return; }
+        await runCheck('/check/mod-list', { gameDomain, modIds });
+    }
+
+    async function runCheck(endpoint, body) {
+        const status = document.getElementById('status');
+        const reportDiv = document.getElementById('report');
+        reportDiv.innerHTML = '';
+        status.textContent = 'Ingesting...';
+        try {
+            const ingestRes = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!ingestRes.ok) {
+                throw new Error(`Ingest failed (${ingestRes.status}): ${await ingestRes.text()}`);
+            }
+            const ingest = await ingestRes.json();
+            status.textContent = `Ingested ${ingest.modCount} mods, ${ingest.fileCount} files (check run ${ingest.checkRunId}). Fetching report...`;
+
+            const reportRes = await fetch(`/check/${ingest.checkRunId}/report`);
+            if (!reportRes.ok) {
+                throw new Error(`Report failed (${reportRes.status}): ${await reportRes.text()}`);
+            }
+            const report = await reportRes.json();
+            status.textContent = `Check run ${report.checkRunId}${report.sourceRef ? ' (' + report.sourceRef + ')' : ''}`;
+            renderReport(report);
+        } catch (err) {
+            status.textContent = '';
+            reportDiv.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
+        }
+    }
+
+    function renderReport(report) {
+        document.getElementById('report').innerHTML = [
+            section('Missing dependencies', report.missingDependencies, d =>
+                `<strong>${escapeHtml(d.name)}</strong> (mod ${d.nexusModId}) &mdash; required by ${d.requiredBy.map(escapeHtml).join(', ')}`
+            ),
+            section('Unavailable mods', report.unavailableMods, m =>
+                `<strong>${escapeHtml(m.name)}</strong> (mod ${m.nexusModId}) &mdash; delisted from Nexus`
+            ),
+            section('Outdated pins', report.outdatedPins, p =>
+                `<strong>${escapeHtml(p.modName)}</strong> &mdash; pinned ${escapeHtml(p.pinnedVersion)}, current ${escapeHtml(p.currentVersion)}`
+            ),
+            section('File conflicts', report.fileConflicts, c =>
+                `<span class="severity-${escapeHtml(c.severity)}">[${escapeHtml(c.severity)}]</span> <span class="conflict-path">${escapeHtml(c.filePath)}</span> &mdash; ${c.mods.map(escapeHtml).join(', ')}`
+            )
+        ].join('');
+    }
+
+    function section(title, items, renderItem) {
+        if (!items || items.length === 0) {
+            return `<section><h2>${title}</h2><p class="empty">None found.</p></section>`;
+        }
+        return `<section><h2>${title} (${items.length})</h2><ul>${items.map(i => `<li>${renderItem(i)}</li>`).join('')}</ul></section>`;
+    }
+
+    function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+</script>
+</body>
+</html>
