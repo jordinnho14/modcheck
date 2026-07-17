@@ -5,6 +5,8 @@ import dev.modcheck.modcheck.service.CheckService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequiredArgsConstructor
 public class CheckController {
@@ -22,6 +24,13 @@ public class CheckController {
     public CheckReportService.CheckReport report(@PathVariable Long id) {
         return checkReportService.getReport(id);
     }
+
+    @PostMapping("/check/mod-list")
+    public CheckService.IngestResult checkModList(@RequestBody ModListCheckRequest request) {
+        return checkService.ingestModList(request.gameDomain(), request.modIds());
+    }
+
+    public record ModListCheckRequest(String gameDomain, List<Integer> modIds) {}
 
     public record CheckRequest(String collectionSlug) {}
 }

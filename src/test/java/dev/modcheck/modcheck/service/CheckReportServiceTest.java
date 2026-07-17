@@ -9,18 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * These three methods are pure functions with no Spring/DB dependency, so
- * they're tested directly - no @SpringBootTest, no Postgres needed. Every
- * case here is a real bug found by running against a live collection
- * (xk05aw rev 311), turned into a regression test rather than left as a
- * one-off manual check.
- */
 class CheckReportServiceTest {
-
-    // --- severityOf: found because Nexus returns fileExtension WITH a
-    // leading dot (".pex"), not bare ("pex") - every comparison silently
-    // failed until this was made tolerant of either format. ---
 
     @Test
     void dottedHighRiskExtensionIsHigh() {
@@ -84,10 +73,6 @@ class CheckReportServiceTest {
         // regionMatches must not blow up on a string shorter than "Data/".
         assertEquals("abc", normalize("abc"));
     }
-
-    // --- isInstallerMetadata: found because fomod/ files are installer
-    // scaffolding, never actually extracted into the game folder - they
-    // aren't real conflicts, just noise every FOMOD-packaged mod shares. ---
 
     @Test
     void fomodPathIsInstallerMetadata() {

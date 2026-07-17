@@ -43,7 +43,7 @@ public class CheckService {
         }
 
         Game game = gameRepository.findByDomainName(domainName)
-            .orElseGet(() -> createGame(domainName, modFiles));
+            .orElseGet(() -> createGame(domainName, modFiles.getFirst().file().mod().modId()));
 
         CheckRun checkRun = CheckRun.builder()
             .game(game)
@@ -78,8 +78,47 @@ public class CheckService {
 
     }
 
-    private Game createGame(String domainName, List<CollectionModFile> modFiles) {
-        int firstModId = modFiles.getFirst().file().mod().modId();
+    @Transactional
+    public IngestResult ingestModList(String gameDomain, List<Integer> modIds) {
+        if (modIds == null || modIds.isEmpty()) {
+            throw new IllegalArgumentException("Mod list must contain at least one mod id.");
+        }
+
+        Game game = gameRepository.findByDomainName(gameDomain)
+            .orElseGet(() -> createGame(gameDomain, modIds.getFirst()));
+
+        CheckRun checkRun = CheckRun.builder()
+            .game(game)
+            .inputType(InputType.MOD_LIST)
+            .sourceRef(null)
+            .revision(null)
+            .createdAt(OffsetDateTime.now())
+            .build();
+
+        checkRunRepository.save(checkRun);
+
+        int fileCount = 0;
+        Set<Long> seenModIds = new HashSet<>();
+
+        for (Integer modId : modIds) {
+            Mod mod = modRepository.findByGameAndNexusModId(game, modId)
+                .orElseGet(() -> createModWithFiles(game, new ModRef(modId, "Unknown mod " + modId, null)));
+
+            checkInputFileRepository.save(CheckInputFile.builder()
+                .checkRun(checkRun)
+                .mod(mod)
+                .nexusFileId(null)
+                .fileName(null)
+                .fileVersion(null)
+                .optional(false)
+                .build());
+            fileCount++;
+            seenModIds.add(mod.getId());
+        }
+        return new IngestResult(checkRun.getId(), seenModIds.size(), fileCount);
+    }
+
+    private Game createGame(String domainName, int firstModId) {
         ModMetadata meta = nexusClient.getModMetadata(domainName, firstModId);
         Game game = new Game();
         game.setDomainName(domainName);

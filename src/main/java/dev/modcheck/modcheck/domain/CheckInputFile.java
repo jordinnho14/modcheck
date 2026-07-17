@@ -23,7 +23,7 @@ public class CheckInputFile {
     @JoinColumn(name = "mod_id", nullable = false)
     private Mod mod;
 
-    @Column(name = "nexus_file_id", nullable = false)
+    @Column(name = "nexus_file_id")
     private Integer nexusFileId;
 
     @Column(name = "file_name")
